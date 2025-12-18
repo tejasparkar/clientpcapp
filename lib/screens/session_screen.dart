@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import '../services/api_service.dart';
-import '../services/websocket_service.dart';
+import '../services/socket_io_service.dart';
 import '../services/system_monitor_service.dart';
 import 'login_screen.dart';
 
@@ -17,7 +17,7 @@ class SessionScreen extends StatefulWidget {
 
 class _SessionScreenState extends State<SessionScreen> {
   final ApiService _apiService = ApiService();
-  final WebSocketService _wsService = WebSocketService();
+  final SocketIOService _socketService = SocketIOService();
   final SystemMonitorService _systemMonitor = SystemMonitorService();
   
   late Timer _sessionTimer;
@@ -36,13 +36,17 @@ class _SessionScreenState extends State<SessionScreen> {
     _userName = widget.sessionData['userName'] ?? 'User';
     _remainingMinutes = widget.sessionData['walletBalance'] ?? 0;
     
-    _wsService.connect(widget.sessionData['pcId']);
-    _wsService.messages.listen(_handleWebSocketMessage);
+    // Socket.IO connection should already be established from login screen
+    // Listen for Socket.IO messages
+    _socketService.messages.listen(_handleSocketIOMessage);
     
     _systemMonitor.startMonitoring((metrics) {
       setState(() => _systemMetrics = metrics);
-      _wsService.sendSystemMetrics(metrics);
+      _socketService.sendSystemMetrics(metrics);
     });
+
+    // Send session start notification
+    _socketService.sendSessionStart(widget.sessionData['sessionId'], widget.sessionData['userId'] ?? 'unknown');
 
     _sessionTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       setState(() {
@@ -50,7 +54,7 @@ class _SessionScreenState extends State<SessionScreen> {
         if (_elapsedSeconds >= 60) {
           _remainingMinutes--;
           _elapsedSeconds = 0;
-          
+
           if (_remainingMinutes <= 0) {
             _endSession();
           } else if (_remainingMinutes <= 5) {
@@ -61,7 +65,7 @@ class _SessionScreenState extends State<SessionScreen> {
     });
   }
 
-  void _handleWebSocketMessage(Map<String, dynamic> message) {
+  void _handleSocketIOMessage(Map<String, dynamic> message) {
     switch (message['type']) {
       case 'admin_command':
         _handleAdminCommand(message['command']);
@@ -117,14 +121,17 @@ class _SessionScreenState extends State<SessionScreen> {
   Future<void> _endSession({bool forced = false}) async {
     _sessionTimer.cancel();
     _systemMonitor.stopMonitoring();
-    
+
+    // Send session end notification
+    _socketService.sendSessionEnd(widget.sessionData['sessionId']);
+
     try {
       await _apiService.endSession(widget.sessionData['sessionId']);
     } catch (e) {
       print('Error ending session: $e');
     }
 
-    _wsService.disconnect();
+    _socketService.disconnect();
 
     Navigator.pushReplacement(
       context,
@@ -142,7 +149,7 @@ class _SessionScreenState extends State<SessionScreen> {
   void dispose() {
     _sessionTimer.cancel();
     _systemMonitor.stopMonitoring();
-    _wsService.disconnect();
+    _socketService.disconnect();
     super.dispose();
   }
 
