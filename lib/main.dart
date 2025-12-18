@@ -3,13 +3,25 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import 'package:window_manager/window_manager.dart';
 import 'screens/login_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+Future<String> _getPCId() async {
+  final prefs = await SharedPreferences.getInstance();
+  String? pcId = prefs.getString('pc_id');
+  if (pcId == null) {
+    pcId = const Uuid().v4();
+    await prefs.setString('pc_id', pcId);
+  }
+  return pcId;
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   // Initialize window manager for desktop
   await windowManager.ensureInitialized();
-  
+  final pcId = await _getPCId();
   WindowOptions windowOptions = const WindowOptions(
     size: Size(1200, 900),
     center: true,

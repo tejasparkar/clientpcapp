@@ -1,6 +1,5 @@
 // ===== services/socket_io_service.dart =====
 import 'dart:async';
-import 'dart:io';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class SocketIOService {
@@ -9,177 +8,126 @@ class SocketIOService {
 
   Stream<Map<String, dynamic>> get messages => _messageController.stream;
 
-  // Check if server is reachable
-  Future<bool> checkServerAvailability() async {
-    try {
-      final result = await InternetAddress.lookup('localhost');
-      if (result.isNotEmpty && result[0].rawAddress.isNotEmpty) {
-        // Try to connect to port 3000
-        final socket = await Socket.connect('localhost', 3000, timeout: Duration(seconds: 3));
-        socket.destroy();
-        return true;
-      }
-    } catch (e) {
-      print('Server availability check failed: $e');
-      return false;
-    }
-    return false;
-  }
+  bool get isConnected => _socket?.connected ?? false;
 
-  // Connect to Socket.IO server
   Future<void> connect(String pcId, String pcName, String deviceId) async {
-    // Check if server is available first
-    bool serverAvailable = await checkServerAvailability();
-    if (!serverAvailable) {
-      print('Server not available. PC will operate in offline mode.');
-      _messageController.add({
-        'type': 'server_unavailable',
-        'pc_id': pcId,
-        'pc_name': pcName,
-        'device_id': deviceId,
-      });
-      return;
-    }
+    // Disconnect if already connected
+    disconnect();
 
-    _socket = IO.io('http://localhost:3000', <String, dynamic>{
+    _socket = IO.io('http://localhost:5000', <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
-      'timeout': 5000, // 5 second timeout
-      'forceNew': true,
+      'query': {
+        'pcId': pcId,
+        'pcName': pcName,
+        'deviceId': deviceId,
+      },
     });
 
-    // Set up event listeners
     _socket!.onConnect((_) {
-      print('Connected to Socket.IO server');
-
-      // Send PC registration info on connection
-      _socket!.emit('pc_register', {
-        'pc_id': pcId,
-        'pc_name': pcName,
-        'device_id': deviceId,
-        'timestamp': DateTime.now().toIso8601String(),
-      });
+      print('Socket.IO connected to port 5000');
+      _messageController.add({'type': 'connected'});
     });
 
     _socket!.onDisconnect((_) {
-      print('Disconnected from Socket.IO server');
+      print('Socket.IO disconnected');
+      _messageController.add({'type': 'disconnected'});
     });
 
     _socket!.onConnectError((error) {
       print('Socket.IO connection error: $error');
-      _messageController.add({
-        'type': 'connection_error',
-        'error': error.toString(),
-      });
+      _messageController.add({'type': 'connection_error', 'error': error});
     });
 
     _socket!.onError((error) {
       print('Socket.IO error: $error');
-      _messageController.add({
-        'type': 'socket_error',
-        'error': error.toString(),
-      });
+      _messageController.add({'type': 'error', 'error': error});
     });
 
-    _socket!.onConnecting((_) {
-      print('Socket.IO connecting...');
-    });
-
-    _socket!.onConnectTimeout((_) {
-      print('Socket.IO connection timeout');
+    // Listen for custom events
+    _socket!.on('message', (data) {
+      print('Received message: $data');
       _messageController.add({
-        'type': 'connection_timeout',
-      });
-    });
-
-    // Listen for server events
-    _socket!.on('admin_command', (data) {
-      _messageController.add({
-        'type': 'admin_command',
-        'command': data['command'],
+        'type': 'message',
         'data': data,
       });
     });
 
-    _socket!.on('balance_update', (data) {
+    _socket!.on('pc_command', (data) {
+      print('Received PC command: $data');
       _messageController.add({
-        'type': 'balance_update',
-        'balance': data['balance'],
+        'type': 'pc_command',
+        'data': data,
       });
     });
 
-    _socket!.on('force_logout', (data) {
+    _socket!.on('system_request', (data) {
+      print('Received system request: $data');
       _messageController.add({
-        'type': 'force_logout',
+        'type': 'system_request',
+        'data': data,
       });
     });
 
-    _socket!.on('pc_assigned', (data) {
-      _messageController.add({
-        'type': 'pc_assigned',
-        'pc_number': data['pc_number'],
-      });
-    });
-
-    // Connect to server
+    // Connect to the server
     _socket!.connect();
   }
 
-  // Send PC status
-  void sendPCStatus(String status, Map<String, dynamic> data) {
-    if (_socket != null && _socket!.connected) {
-      _socket!.emit('pc_status', {
-        'status': status,
-        'data': data,
-        'timestamp': DateTime.now().toIso8601String(),
-      });
-    }
-  }
-
-  // Send system metrics
-  void sendSystemMetrics(Map<String, dynamic> metrics) {
-    if (_socket != null && _socket!.connected) {
-      _socket!.emit('system_metrics', {
-        'metrics': metrics,
-        'timestamp': DateTime.now().toIso8601String(),
-      });
-    }
-  }
-
-  // Send session start
-  void sendSessionStart(String sessionId, String userId) {
-    if (_socket != null && _socket!.connected) {
-      _socket!.emit('session_start', {
-        'session_id': sessionId,
-        'user_id': userId,
-        'timestamp': DateTime.now().toIso8601String(),
-      });
-    }
-  }
-
-  // Send session end
-  void sendSessionEnd(String sessionId) {
-    if (_socket != null && _socket!.connected) {
-      _socket!.emit('session_end', {
-        'session_id': sessionId,
-        'timestamp': DateTime.now().toIso8601String(),
-      });
-    }
-  }
-
-  // Send custom message
-  void sendMessage(String event, Map<String, dynamic> data) {
-    if (_socket != null && _socket!.connected) {
+  void sendMessage(String event, dynamic data) {
+    if (_socket != null && isConnected) {
       _socket!.emit(event, data);
+      print('Sent $event: $data');
+    } else {
+      print('Socket.IO not connected, cannot send message');
     }
   }
 
-  // Check connection status
-  bool get isConnected => _socket?.connected ?? false;
+  void sendPCStatus(String status, Map<String, dynamic> data) {
+    sendMessage('pc_status', {
+      'status': status,
+      'data': data,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
 
-  // Disconnect
+  void sendSystemMetrics(Map<String, dynamic> metrics) {
+    sendMessage('system_metrics', {
+      'metrics': metrics,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  void sendSessionStart(String sessionId, String userId) {
+    sendMessage('session_start', {
+      'sessionId': sessionId,
+      'userId': userId,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  void sendSessionEnd(String sessionId) {
+    sendMessage('session_end', {
+      'sessionId': sessionId,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
+  void sendCommandResponse(String commandId, Map<String, dynamic> response) {
+    sendMessage('command_response', {
+      'commandId': commandId,
+      'response': response,
+      'timestamp': DateTime.now().toIso8601String(),
+    });
+  }
+
   void disconnect() {
     _socket?.disconnect();
+    _socket?.destroy();
+    _socket = null;
+  }
+
+  void dispose() {
+    disconnect();
     _messageController.close();
   }
 }
